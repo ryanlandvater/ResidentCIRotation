@@ -87,6 +87,7 @@ def get_qc_data(analyzer_name):
 
     query = text(f"""
     SELECT 
+        qc.id,
         qc.timestamp,
         qc.result
     FROM qc_results qc
@@ -100,7 +101,43 @@ def get_qc_data(analyzer_name):
 
     return df
 
-def get_reference_ranges(analyzer_name):
+def get_patient_results(analyzer_name):
+    """
+    Fetch patient results data from database for a given analyzer.
+    
+    Parameters:
+    -----------
+    analyzer_name : str
+        Name of the analyzer (e.g., 'Sodium, Plasma')
+    
+    Returns:
+    --------
+    pandas.DataFrame
+        DataFrame with columns: timestamp, patient_result
+    """
+    engine = create_engine(
+        "postgresql+psycopg2://resident:secure_password_here@pirotationpostgres-1.clug0i4i67w8.us-east-2.rds.amazonaws.com:5432/postgres"
+    )
+
+    query = text(f"""
+    SELECT 
+        pr.timestamp,
+        pr.result AS patient_result,
+        qc.timestamp AS qc_timestamp,
+        qc.result AS qc_value
+    FROM results pr
+    JOIN analyzers a ON pr.analyzer = a.id
+    JOIN qc_results qc ON pr.qc_run = qc.id
+    WHERE a.name = '{analyzer_name}'
+    ORDER BY pr.timestamp, pr.result;
+    """)
+
+    with engine.connect() as conn:
+        df = pd.read_sql(query, conn)
+
+    return df
+
+def get_reference_ranges(analyzer_name) -> tuple[float, float]:
     """
     Fetch reference range data from database for a given analyzer.
     
@@ -119,40 +156,21 @@ def get_reference_ranges(analyzer_name):
 
     # FILL IN THE QUERY TO FETCH REFERENCE RANGES BASED ON THE ANALYZER NAME
     query = f"""
-    Select rr_lower_bound, rr_upper_bound from analyzers where name = '{analyzer_name}'"""
-
-    with engine.connect() as conn:
-        result = conn.execute(text(query)).fetchone()
-        if result:
-            ref_lower, ref_upper = result
-            return ref_lower, ref_upper
-        else:
-            return None, None
-
-def westgard_check (analyzer_name):
-    """
-    Placeholder for Westgard rules implementation.
+    Select rr_lower_bound, rr_upper_bound from analyzers where name = '{analyzer_name}'
     """
 
-    engine = create_engine(
-        "postgresql+psycopg2://resident:secure_password_here@pirotationpostgres-1.clug0i4i67w8.us-east-2.rds.amazonaws.com:5432/postgres"
-    )
-
-    # FILL IN THE QUERY TO FETCH REFERENCE RANGES BASED ON THE ANALYZER NAME
-    query = f"""
-    
-    """
-
-    with engine.connect() as conn:
-        result = conn.execute(text(query)).fetchone()
-        if result:
-            ref_lower, ref_upper = result
-            return ref_lower, ref_upper
-        else:
-            return None, None
-
-
-    pass
+    try: 
+        with engine.connect() as conn:
+            result = conn.execute(text(query)).fetchone()
+            if result:
+                return result[0], result[1]
+            else:
+                print(f"No reference range found for analyzer: {analyzer_name}")
+                return 0.0, 0.0
+        
+    except Exception as e:
+        print(f"Error fetching reference ranges: {e}")
+        return 0.0, 0.0   
 
 def perform_westguard_analysis(data: pd.Series, mean: float, sd: float) -> tuple[pd.Series, pd.Series]:
     # Our rules that we write will live here.
@@ -161,3 +179,40 @@ def perform_westguard_analysis(data: pd.Series, mean: float, sd: float) -> tuple
     warnings_mask = (data > mean + 2*sd) | (data < mean - 2*sd) # Example 1S2 rule
     failures_mask = (data > mean + 3*sd) | (data < mean - 3*sd) # Example 1S3 rule
     return warnings_mask, failures_mask
+
+def return_failed_orders(qc_failures: pd.Series) -> pd.DataFrame:
+    """
+    Returns patient results associated with failed QC runs.
+    
+    Parameters:
+    -----------
+    qc_failures : pd.Series
+        Series of QC result IDs that failed Westgard rules
+    
+    Returns:
+    --------
+    pandas.DataFrame
+        DataFrame with patient results from failed QC runs
+    """
+    engine = create_engine(
+        "postgresql+psycopg2://resident:secure_password_here@pirotationpostgres-1.clug0i4i67w8.us-east-2.rds.amazonaws.com:5432/postgres"
+    )
+    
+    if qc_failures.empty:
+        print("No failed QC runs provided.")
+        return pd.DataFrame()
+    
+    # FILL IN THE QUERY TO FETCH PATIENT RESULTS ASSOCIATED WITH THE FAILED QC RUNS
+    # You will use the phrase WHERE qc_results.id IN ({qc_id_list})
+    qc_id_list = ", ".join(str(id) for id in qc_failures)
+    query = text(f"""
+
+    """)
+    
+    try: 
+        with engine.connect() as conn:
+            df = pd.read_sql(query, conn)
+            return df
+    except Exception as e:
+        print(f"Error fetching failed orders: {e}")
+        return pd.DataFrame()
